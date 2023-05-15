@@ -2,16 +2,15 @@
 #![allow(incomplete_features)]
 #![feature(async_fn_in_trait)]
 
-use error::{HttpActionNotSupported, Result};
+use error::{Result};
 use log::{error, info};
 use idea_vote_state_actor_codec::{
     NAME,
-    txn::{Task, Txns},
+    txn::{Txns},
     *,
 };
-use sql::query_all_tasks;
 use tea_sdk::{
-    actors::{adapter::HttpRequest, replica::ExecTxnCast, state_receiver::ActorTxnCheckMessage},
+    actors::{replica::ExecTxnCast, state_receiver::ActorTxnCheckMessage},
     actorx::{actor, ActorId, hooks::Activate, HandlerActor},
     deserialize,
     serde::handle::{Handle, Handles},
@@ -19,7 +18,7 @@ use tea_sdk::{
         action::process_txn_error, actors::adapter::register_adapter_http_dispatcher,
         logging::set_logging,
     },
-    Handle, ResultExt,
+    Handle
 };
 
 
@@ -37,8 +36,7 @@ pub struct Actor;
 impl Handles for Actor {
     type List = Handle![
         Activate,
-        HttpRequest,
-        TaskQueryRequest,
+        IdeaQueryRequest,
         ExecTxnCast,
         ActorTxnCheckMessage
     ];
@@ -65,22 +63,15 @@ impl Handle<Activate> for Actor {
     }
 }
 
-impl Handle<HttpRequest> for Actor {
-    async fn handle(&self, HttpRequest { action, payload }: HttpRequest) -> Result<Vec<u8>> {
-        match action.as_str() {
-            "query-tasks" => {
-                let query: TaskQueryRequest = serde_json::from_slice(&payload)?;
-                let tasks = query_tasks_by_filter(query).await?;
-                serde_json::to_vec(&tasks).err_into()
-            }
-            _ => Err(HttpActionNotSupported(action).into()),
+impl Handle<IdeaQueryRequest> for Actor {
+    async fn handle(&self, req: IdeaQueryRequest) -> Result<IdeaQueryResponse> {
+        if req.owner.is_none() {
+            Ok(IdeaQueryResponse(sql::query_all_ideas().await?))
+        } else {
+            Ok(IdeaQueryResponse(
+                sql::query_ideas_by_owner(req.owner.unwrap()).await?,
+            ))
         }
-    }
-}
-
-impl Handle<TaskQueryRequest> for Actor {
-    async fn handle(&self, req: TaskQueryRequest) -> Result<TaskQueryResponse> {
-        Ok(TaskQueryResponse(query_tasks_by_filter(req).await?))
     }
 }
 
@@ -104,24 +95,3 @@ impl Handle<ActorTxnCheckMessage> for Actor {
     }
 }
 
-async fn query_tasks_by_filter(req: TaskQueryRequest) -> Result<Vec<Task>> {
-    // we simply query all tasks here, considering add filters in sql for higher performance
-    let tasks = query_all_tasks().await?;
-    Ok(tasks
-        .into_iter()
-        .filter(|v| {
-            req.creator
-                .map_or_else(|| true, |creator| creator == v.creator)
-        })
-        .filter(|v| {
-            req.worker
-                .map_or_else(|| true, |worker| Some(worker) == v.worker)
-        })
-        .filter(|v| req.status.map_or_else(|| true, |status| status == v.status))
-        .filter(|v| {
-            req.subject
-                .as_ref()
-                .map_or_else(|| true, |subject| subject == &v.subject)
-        })
-        .collect())
-}

@@ -8,12 +8,10 @@ pub mod txn;
 
 pub const NAME: &[u8] = b"com.developer.idea-vote-state-actor";
 
+
 #[derive(Debug, Clone, Serialize, Deserialize, TypeId)]
-pub struct TaskQueryRequest {
-    pub creator: Option<Account>,
-    pub worker: Option<Account>,
-    pub status: Option<txn::Status>,
-    pub subject: Option<String>,
+pub struct IdeaQueryRequest {
+    pub owner: Option<Account>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TypeId)]
-pub struct TaskQueryResponse(pub Vec<txn::Task>);
+pub struct IdeaQueryResponse(pub Vec<txn::Idea>);

@@ -3,13 +3,13 @@ use strum_macros::{AsRefStr, Display, EnumString};
 use tea_sdk::tapp::{Account, Balance};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Task {
-    pub creator: Account,
-    pub subject: String,
-    pub price: Balance,
-    pub required_deposit: Balance,
-    pub status: Status,
-    pub worker: Option<Account>,
+pub struct Idea {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub owner: Account,
+    pub create_at: u64,
+    pub total_contribution: String,
 }
 
 #[derive(
@@ -25,26 +25,18 @@ pub enum Status {
 #[derive(Debug, Clone, Serialize, Deserialize, AsRefStr, Display)]
 pub enum Txns {
     Init {},
-    CreateTask {
-        task: Task,
+    CreateIdea {
+        id: String,
+        title: String,
+        description: String,
+        owner: Account,
         auth_b64: String,
+        unit: Balance,
     },
-    DeleteTask {
-        subject: String,
+    VoteIdea {
+        id: String,
+        user: Account,
         auth_b64: String,
-    },
-    VerifyTask {
-        subject: String,
-        failed: bool,
-        auth_b64: String,
-    },
-    TakeTask {
-        subject: String,
-        worker: Account,
-        auth_b64: String,
-    },
-    CompleteTask {
-        subject: String,
-        auth_b64: String,
+        price: Balance,
     },
 }

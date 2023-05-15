@@ -1,6 +1,6 @@
 use crate::{error::Result, utils::my_token_id};
+use idea_vote_state_actor_codec::txn::{Idea};
 use log::info;
-use idea_vote_state_actor_codec::txn::*;
 use tea_sdk::{
     actor_txns::Tsid,
     actors::tokenstate::{ExecGlueCmdRequest, InitGlueSqlRequest, NAME},
@@ -9,142 +9,79 @@ use tea_sdk::{
     tapp::{Account, Balance},
     utils::wasm_actor::{
         actors::tokenstate::{
-            query_first_row, query_select_rows, sql_query_first, sql_value_to_option_string,
-            sql_value_to_string,
+            query_first_row, query_select_rows, sql_query_first, 
+            sql_value_to_string, sql_value_to_u64
         },
         prelude::Row,
     },
     vmh::message::{encode_protobuf, structs_proto::tokenstate},
     OptionExt,
+    vmh::utils::to_short_timestamp
 };
 
-pub(crate) async fn query_all_tasks() -> Result<Vec<Task>> {
-    let payload = sql_query_first(my_token_id().await?, "SELECT * FROM Tasks;".into()).await?;
-    let rows = query_select_rows(&payload)?;
-    rows.iter().map(|v| parse_task(v)).collect()
-}
-
-pub(crate) async fn task_by_subject(subject: &str) -> Result<Task> {
+pub(crate) async fn query_all_ideas() -> Result<Vec<Idea>> {
     let payload = sql_query_first(
         my_token_id().await?,
-        format!("SELECT * FROM Tasks where subject = '{subject}';"),
+        "SELECT * FROM Ideas;".into(),
+    )
+    .await?;
+    let rows = query_select_rows(&payload)?;
+    rows.iter().map(|v| parse_idea(v)).collect()
+}
+
+pub(crate) async fn query_by_id(id: &str) -> Result<Idea> {
+    let payload = sql_query_first(
+        my_token_id().await?,
+        format!("SELECT * FROM Ideas WHERE id = '{id}';"),
     )
     .await?;
     let r = query_first_row(&payload)?;
-    parse_task(r)
+    parse_idea(r)
 }
 
-pub(crate) async fn sum_task_deposit(subject: &str) -> Result<Balance> {
+
+pub(crate) async fn query_ideas_by_owner(owner: Account) -> Result<Vec<Idea>> {
     let payload = sql_query_first(
         my_token_id().await?,
-        format!("SELECT price FROM TaskExecution where subject='{subject}';"),
+        format!("SELECT * FROM Ideas WHERE owner = '{owner:?}';"),
     )
     .await?;
     let rows = query_select_rows(&payload)?;
-    let mut sum = Balance::zero();
-    for row in rows {
-        let price = Balance::from_str_radix(
-            &sql_value_to_string(row.get_value_by_index(0).ok_or_err("price")?)?,
-            10,
-        )?;
-        sum = sum.checked_add(price).ok_or_err("add overflow")?;
-    }
-    Ok(sum)
+    rows.iter().map(|v| parse_idea(v)).collect()
 }
 
-pub(crate) async fn has_task_executed(subject: &str) -> Result<bool> {
-    let payload = sql_query_first(
-        my_token_id().await?,
-        format!("SELECT price FROM TaskExecution where subject='{subject}';"),
-    )
-    .await?;
-    let rows = query_select_rows(&payload)?;
-    Ok(rows.len() > 1)
-}
-
-pub(crate) async fn create_task(tsid: Tsid, task: &Task) -> Result<()> {
-    exec_sql(
-        tsid,
-        format!(
-            r#"
-            INSERT INTO Tasks VALUES (
-                '{subject}','{creator:?}',NULL,'{status}','{price}','{required_deposit}'
-            );
-            INSERT INTO TaskExecution VALUES (
-                '{subject}', '{creator:?}', '{price}'
-            );
-            "#,
-            subject = task.subject,
-            creator = task.creator,
-            status = Status::New,
-            price = task.price,
-            required_deposit = task.required_deposit
-        ),
-    )
-    .await
-}
-
-pub(crate) async fn delete_task(tsid: Tsid, subject: &str) -> Result<()> {
-    exec_sql(
-        tsid,
-        format!(
-            r#"
-            DELETE FROM Tasks WHERE subject = '{subject}';
-            DELETE FROM TaskExecution WHERE subject = '{subject}';
-        "#
-        ),
-    )
-    .await
-}
-
-pub(crate) async fn verify_task(tsid: Tsid, subject: &str, failed: bool) -> Result<()> {
-    let sql = if failed {
-        format!(
-            "UPDATE Tasks SET status = '{}', worker = NULL WHERE subject = '{subject}';",
-            Status::New
-        )
-    } else {
-        format!(
-            "UPDATE Tasks SET status = '{}' WHERE subject = '{subject}';",
-            Status::Done
-        )
-    };
+pub(crate) async fn create_idea(
+    tsid: Tsid,
+    id: String,
+    title: String,
+    description: String,
+    owner: Account,
+    unit: Balance,
+) -> Result<()> {
+    let sql = format!(
+        r#"
+    INSERT INTO Ideas VALUES (
+        '{id}', '{title}', '{description}', '{owner:?}', {create_at}, '{total_contribution}'
+    );
+        "#,
+        create_at = to_short_timestamp(tsid.ts)?,
+        total_contribution = unit.to_string(),
+    );
     exec_sql(tsid, sql).await
 }
-
-pub(crate) async fn take_task(
-    tsid: Tsid,
-    subject: &str,
-    worker: Account,
-    required_deposit: Balance,
-) -> Result<()> {
+pub(crate) async fn vote_idea(tsid: Tsid, id: String, _user: Account, price: Balance) -> Result<()> {
+    let idea = query_by_id(&id).await?;
+    let total_contribution = Balance::from_str_radix(&idea.total_contribution, 10)?;
+    let new_total_contribution = total_contribution.checked_add(price).ok_or_err("add overflow")?;
     exec_sql(
         tsid,
-        format!(
-            r#"
-            UPDATE Tasks SET 
-                status = '{}',worker = '{worker:?}' 
-                WHERE subject = '{subject}';
-            INSERT INTO TaskExecution VALUES (
-                '{subject}', '{worker:?}', '{required_deposit}'
-            );
-               "#,
-            Status::InProgress
-        ),
+        format!("UPDATE Ideas SET total_contribution = '{}' WHERE id = '{id}';", new_total_contribution.to_string()),
     )
-    .await
+    .await?;
+
+    Ok(())
 }
 
-pub(crate) async fn complete_task(tsid: Tsid, subject: &str) -> Result<()> {
-    exec_sql(
-        tsid,
-        format!(
-            "UPDATE Tasks SET status = '{}' WHERE subject = '{subject}';",
-            Status::WaitForVerification
-        ),
-    )
-    .await
-}
 
 pub(crate) async fn sql_init(tsid: Tsid) -> Result<()> {
     let req = tokenstate::InitGlueSqlRequest {
@@ -175,21 +112,16 @@ async fn exec_sql(tsid: Tsid, sql: String) -> Result<()> {
     Ok(())
 }
 
-fn parse_task(v: &Row) -> Result<Task> {
-    Ok(Task {
-        subject: sql_value_to_string(v.get_value_by_index(0).ok_or_err("subject")?)?.to_string(),
-        creator: sql_value_to_string(v.get_value_by_index(1).ok_or_err("creator")?)?.parse()?,
-        worker: sql_value_to_option_string(v.get_value_by_index(2).ok_or_err("worker")?)?
-            .map(|v| v.parse())
-            .transpose()?,
-        status: sql_value_to_string(v.get_value_by_index(3).ok_or_err("status")?)?.parse()?,
-        price: Balance::from_str_radix(
-            &sql_value_to_string(v.get_value_by_index(4).ok_or_err("price")?)?,
-            10,
-        )?,
-        required_deposit: Balance::from_str_radix(
-            &sql_value_to_string(v.get_value_by_index(5).ok_or_err("required_deposit")?)?,
-            10,
-        )?,
-    })
+fn parse_idea(v: &Row) -> Result<Idea> {
+    let idea = Idea {
+        id: sql_value_to_string(v.get_value_by_index(0).ok_or_err("id")?)?.to_string(),
+        title: sql_value_to_string(v.get_value_by_index(1).ok_or_err("title")?)?.to_string(),
+        description: sql_value_to_string(v.get_value_by_index(2).ok_or_err("description")?)?
+            .to_string(),
+        owner: sql_value_to_string(v.get_value_by_index(3).ok_or_err("owner")?)?.parse()?,
+        create_at: sql_value_to_u64(v.get_value_by_index(4).ok_or_err("0")?)?,
+        total_contribution: sql_value_to_string(v.get_value_by_index(5).ok_or_err("total_contribution")?)?.to_string(),
+    };
+    Ok(idea)
 }
+

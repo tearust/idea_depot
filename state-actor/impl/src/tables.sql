@@ -1,18 +1,10 @@
-CREATE TABLE Tasks
+CREATE TABLE Ideas
 (
-  subject						TEXT UNIQUE,
-  creator						TEXT,
-  worker						TEXT NULL,
-  status						TEXT,
-	price 						TEXT,
-	required_deposit	TEXT
+  id                      TEXT UNIQUE,
+  title						        TEXT,
+  description				      TEXT,
+  owner						        TEXT,
+	create_at               INTEGER,
+  total_contribution      TEXT
 );
-CREATE INDEX idx_subject ON Tasks (subject);
-
-CREATE TABLE TaskExecution
-(
-  subject TEXT,
-  worker  TEXT,
-  price   TEXT
-);
-CREATE INDEX idx_subject ON TaskExecution (subject);
+CREATE INDEX idx_id ON Ideas (id);
